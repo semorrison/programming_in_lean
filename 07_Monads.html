@@ -1,0 +1,887 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2016-11-28 Mon 13:51 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Programming in Lean</title>
+<meta name="generator" content="Org mode" />
+<meta name="author" content="[[http://www.andrew.cmu.edu/user/avigad][Jeremy Avigad]]Jeremy Avigad, [[http://leodemoura.github.io][Leonardo de Moura]]Leonardo de Moura, [[http://jroesch.github.io/][Jared Roesch]]Jared Roesch" />
+<link rel="stylesheet" href="css/tutorial.css"/>
+<link rel="stylesheet" href="css/code.css"/>
+<script type="text/javascript" charset="utf-8">if(!window.PolymerGestures) { var head = document.getElementsByTagName('head')[0]; var js = document.createElement("script"); js.type = "text/javascript"; js.src = "//cdn.jsdelivr.net/webcomponentsjs/0.7.20/webcomponents.min.js"; head.appendChild(js); } </script>
+<link rel='import' href='juicy-ace-editor.html'/>
+</head>
+<body>
+<div id="content">
+<h1 class="title">Programming in Lean</h1>
+
+<div id="outline-container-org8d371f7" class="outline-2">
+<h2 id="Monads"><a id="org8d371f7"></a><span class="section-number-2"> 7</span> Monads</h2>
+<div class="outline-text-2" id="text-Monads">
+<p>
+In this chapter, we will describe a powerful abstraction known as a
+<i>monad</i>. A monad is a type constructor <code>m : Type → Type</code> that comes
+equipped with two special operations, <code>return</code> and <code>bind</code>. If <code>A</code> is
+any type, think of <code>m A</code> as being a "virtual <code>A</code>," or, as some people
+describe it, "an <code>A</code> inside a box." 
+</p>
+
+<p>
+For a given monoid <code>m</code>, the function <code>return</code> has type <code>Π {A : Type},
+A → m A</code>. The idea is that for any element <code>a : A</code>, <code>return a</code>
+produces the virtual version of <code>a</code>, or puts <code>a</code> inside the box.
+</p>
+
+<p>
+Once we are inside the box, we cannot get out; there is no general way
+of taking an element of <code>m A</code> and obtaining an element of <code>A</code>. But the
+<code>bind</code> operation gives us a way of turning some operations on <code>A</code> into
+operations inside the monad. Specifically, for a given monad <code>m</code>, the
+function <code>bind</code> has type <code>Π {A B : Type}, m A → (A → m B) → m
+B</code>. Suppose we have a function <code>f</code> that, given any element <code>a : A</code>,
+produces a virtual element of <code>B</code>; in more prosaic terms, <code>f</code> has
+type <code>A → m B</code>. Suppose also that we have a virtual element of <code>A</code>, that
+is, <code>ma : m A</code>. If we could extract from <code>ma</code> a corresponding element
+<code>a</code> of <code>A</code>, we could apply <code>f</code> to it to get a virtual element of
+<code>B</code>. We cannot do that in general, but <code>bind</code> gives us a way of
+simulating the compound operation: it applies <code>f</code> directly "inside the
+box," and gives us an element of <code>m B</code>.
+</p>
+
+<p>
+As an example of how <code>bind</code> and <code>return</code> can be used, given any
+function <code>f : A → B</code>, we can get a function <code>map f : m A → m B</code> by
+defining <code>map f ma</code> to be <code>bind ma (λ a, return (f a)</code>. Roughly, given
+<code>ma : m A</code>, the <code>bind</code> reaches into the box, finds an associated <code>a</code>,
+and then puts <code>f a</code> back into the box.
+</p>
+
+<p>
+For another example, given any element <code>mma : m (m A)</code>, the expression
+<code>monad.bind mma id</code> has type <code>m A</code>. This means that even though we
+cannot in general extract an element of <code>B</code> from <code>m B</code>, we <i>can</i> do it
+when <code>B</code> itself is a virtual type, <code>m A</code>. The expression <code>monad.bind
+mma id</code> reaches into the <code>m (m A)</code> box, catches hold of an element of
+<code>m A</code>, and simply leaves it in the <code>m A</code> box.
+</p>
+
+<p>
+If you have never come across the notion of a monad before, these
+operations will seem quite mysterious. But instances of <code>return</code> and
+<code>bind</code> arise in many natural ways, and the goal of this chapter is to
+show you some examples. Roughly, they arise in situations where <code>m</code> is
+a type construction with the property that functions in the ordinary
+realm of types can be transported, unformly, into functions in the
+realm of <code>m</code>-types. This should sound quite general, and so it is
+perhaps not that surprising that monads be instantiated in many
+different ways. The power of the abstraction is not only that it
+provides general functions and notation the can be used in all these
+various instantiations, but also that it provides a helpful way of
+thinking about what they all have in common.
+</p>
+
+<p>
+Lean implements the following common notation. First, we have the
+infix notation
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-1' mode="ace/mode/lean" readonly="true">ma &gt;&gt;= f
+</juicy-ace-editor><div id='lean-full-code-1' style='display:none'>ma &gt;&gt;= f
+</div>
+</div>
+<p>
+for <code>bind ma f</code>. Think of this as saying
+"take an element <code>a</code> out of the box, and send it to <code>f</code>." Remember, we
+are allowed to do that as long as the return type of <code>f</code> is of the
+form <code>m B</code>. We also have the infix notation, 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-2' mode="ace/mode/lean" readonly="true">ma &gt;&gt; mb
+</juicy-ace-editor><div id='lean-full-code-2' style='display:none'>ma &gt;&gt; mb
+</div>
+</div>
+<p>
+for <code>bind ma (λ a, mb)</code>. This takes an element <code>a</code> out of the box,
+ignores it entirely, and then returns <code>mb</code>. This is most useful in
+situations where the act of taking an element of the box can be viewed
+as inducing a change of state. In situations like that, you can think
+of <code>ma &gt;&gt;= f</code> as saying "do <code>ma</code>, take the result, and then send it to
+<code>f</code>." You can then think of of <code>ma &gt;&gt; mb</code> more simply as "do <code>ma</code>,
+then do <code>mb</code>." In this way, monads provide a way of simulating
+features of imperative programming languages in a functional
+setting. But, we will see, they do a lot more than that.
+</p>
+
+<p>
+Thinking of monads in terms of performing actions while computing
+results is quite powerful, and Lean provides notation to support that
+perspective. The expression
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-3' mode="ace/mode/lean" readonly="true">do a ← ma, t
+</juicy-ace-editor><div id='lean-full-code-3' style='display:none'>do a ← ma, t
+</div>
+</div>
+<p>
+is syntactic sugar for <code>ma &gt;&gt;= (λ a, t)</code>. Here <code>t</code> is typically an
+expression that depends on <code>a</code>, and it should have type <code>m B</code> for some
+<code>B</code>. So you can read <code>do a ← ma, t</code> as reaching into the box,
+extracting an <code>a</code>, and then continuing the computation with
+<code>t</code>. Similarly, <code>do s, t</code> is syntactic sugar for <code>s &gt;&gt; t</code>, supporting
+the reading "do <code>s</code>, then do <code>t</code>." The notation supports iteration,
+so, for example, 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-4' mode="ace/mode/lean" readonly="true">do a ← s, 
+   b ← t, 
+   f a b, 
+   return (g a b)
+</juicy-ace-editor><div id='lean-full-code-4' style='display:none'>do a ← s, 
+   b ← t, 
+   f a b, 
+   return (g a b)
+</div>
+</div>
+<p>
+is syntactic sugar for
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-5' mode="ace/mode/lean" readonly="true">bind s (λ a, bind t (λ b, bind (f a b) (λ c, return (g a b)))).
+</juicy-ace-editor><div id='lean-full-code-5' style='display:none'>bind s (λ a, bind t (λ b, bind (f a b) (λ c, return (g a b)))).
+</div>
+</div>
+<p>
+It supports the reading "do <code>s</code> and extract <code>a</code>, do <code>t</code> and
+extract <code>b</code>, do <code>f a b</code>, then return the value <code>g a b</code>."
+</p>
+
+<p>
+Incidentally, as you may have guessed, a monad is implemented as a
+type class in Lean. In other words, <code>return</code> really has type 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-6' mode="ace/mode/lean" readonly="true">Π {m : Type → Type} [monad m] {A : Type}, A → m A},
+</juicy-ace-editor><div id='lean-full-code-6' style='display:none'>Π {m : Type → Type} [monad m] {A : Type}, A → m A},
+</div>
+</div>
+<p>
+and <code>bind</code> really has type 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-7' mode="ace/mode/lean" readonly="true">Π {m : Type → Type} [monad m] {A B : Type}, m A → (A → m B) → m B.
+</juicy-ace-editor><div id='lean-full-code-7' style='display:none'>Π {m : Type → Type} [monad m] {A B : Type}, m A → (A → m B) → m B.
+</div>
+</div>
+<p>
+In general, the relevant monad can be inferred from the expressions in
+which <code>bind</code> and <code>return</code> appear, and the monad structure is then
+inferred by type class inference.
+</p>
+
+<p>
+There is a constraint, namely that when we use monads all the types we
+apply the monad to have to live in the same type universe. When all
+the types in question appear as parameters to a definition, Lean's
+elaborator will infer that constraint. When we declare variables
+below, we will satisfy that constraint by explicitly putting them in
+the same universe.
+</p>
+</div>
+
+<div id="outline-container-org0b90bc7" class="outline-3">
+<h3 id="org0b90bc7"><span class="section-number-3"> 7.1</span> The option monad</h3>
+<div class="outline-text-3" id="text-1-1">
+<p>
+The <code>option</code> constructor provides what is perhaps the simplest example
+of a monad. Recall that an element of <code>option A</code> is either of the form
+<code>some a</code> for some element <code>a : A</code>, or <code>none</code>. So an element <code>a</code>
+of <code>option A</code> is a "virtual <code>A</code>" in the sense of being either an
+element of <code>A</code> or an empty promise.
+</p>
+
+<p>
+The associated <code>return</code> is just <code>some</code>: given an element <code>a</code> of <code>A</code>,
+<code>some a</code> returns a virtual <code>A</code>. It is also clear that we cannot go in
+the opposite direction: given an element <code>ma : option A</code>, there is no
+way, in general, of producing an element of <code>A</code>. But we can simulate
+extraction of such an element as long as we are willing to stay in the
+virtual land of <code>options</code>, by defining <code>bind</code> as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-8' mode="ace/mode/lean" readonly="true">def bind {A B : Type} (oa : option A) (f : A → option B) : 
+  option B :=
+match oa with
+| (some a) := f a
+| none     := none
+end
+</juicy-ace-editor><div id='lean-full-code-8' style='display:none'>def bind {A B : Type} (oa : option A) (f : A → option B) : 
+  option B :=
+match oa with
+| (some a) := f a
+| none     := none
+end
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-8').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+If the element <code>oa</code> is <code>some a</code>, we can simply apply <code>f</code> to <code>a</code>, and
+otherwise we simply return <code>none</code>. Notice how the <code>do</code> notation allows
+us to chain these operations:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-9' mode="ace/mode/lean" readonly="true">universe u
+variables {A B C D : Type.{u}} (oa : option A)
+variables (f : A → option B) (g : A → B → option C) 
+          (h : A → B → C → option D)
+
+example : option B :=
+do a ← oa, 
+   b ← f a, 
+   return b
+
+example : option D :=
+do a ← oa,
+   b ← f a,
+   c ← g a b,
+   h a b c
+</juicy-ace-editor><div id='lean-full-code-9' style='display:none'>universe u
+variables {A B C D : Type.{u}} (oa : option A)
+variables (f : A → option B) (g : A → B → option C) 
+          (h : A → B → C → option D)
+
+example : option B :=
+do a ← oa, 
+   b ← f a, 
+   return b
+
+example : option D :=
+do a ← oa,
+   b ← f a,
+   c ← g a b,
+   h a b c
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-9').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+Think of <code>f</code>, <code>g</code>, and <code>h</code> as being partial functions on their
+respective domains, where a return value of <code>none</code> indicates that the
+function is undefined for the given input. Intuitively, the second
+example above returns <code>h a (f a) (g a (f a))</code>, assuming <code>oa</code> is <code>some
+a</code> and all the subterms of that expression are defined. The expression
+<code>h a (f a) (g a (f a))</code> does not actually type check; for example, the
+second argument of <code>h</code> should be of type <code>B</code> rather than <code>option
+B</code>. But monadic notation allows us to simulate the computation of a
+possibly undefined term, where the bind operation serves to percolate
+a value of <code>none</code> to the output.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgf868782" class="outline-3">
+<h3 id="orgf868782"><span class="section-number-3"> 7.2</span> The list monad</h3>
+<div class="outline-text-3" id="text-1-2">
+<p>
+Our next example of a monad is the <code>list</code> monad. In the last section
+we thought of a function <code>f : A → option B</code> as a function which, on
+input <code>A</code>, possibly returns an element of <code>B</code>. Now we will think of a
+function <code>f : A → list B</code> as a function which, on input <code>A</code>, returns a
+list of possible values for the output. This monad is sometimes also
+called the <code>nondeterministic</code> monad, since we can think of <code>f</code> as a
+computation which may nondeterministically return any of the elements
+in the list.
+</p>
+
+<p>
+It is easy to insert a value <code>a : A</code> into <code>list A</code>; we define <code>return
+a</code> to be just the singleton list <code>[a]</code>. Now, given <code>la : list A</code> and
+<code>f : A → list B</code>, how should we define the bind operation <code>la &gt;&gt;= f</code>?
+Intuitively, <code>la</code> represents any of the possible values occuring in
+the list, and for each such element <code>a</code>, <code>f</code> may return any of the
+elements in <code>f a</code>. We can then gather all the possible values of the
+virtual application by applying <code>f</code> to each element of <code>la</code> and
+merging the results into a single list:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-10' mode="ace/mode/lean" readonly="true">open list
+
+def bind {A B : Type} (la : list A) (f : A → list B) : list B :=
+join (map f la)
+</juicy-ace-editor><div id='lean-full-code-10' style='display:none'>open list
+
+def bind {A B : Type} (la : list A) (f : A → list B) : list B :=
+join (map f la)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-10').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+Since the example in the previous section used nothing more than
+generic monad operations, we can replay it in the <code>list</code> setting:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-11' mode="ace/mode/lean" readonly="true">universe u
+variables {A B C D : Type.{u}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) 
+          (h : A → B → C → list D)
+
+example : list D :=
+do a ← la,
+   b ← f a,
+   c ← g a b,
+   h a b c
+</juicy-ace-editor><div id='lean-full-code-11' style='display:none'>universe u
+variables {A B C D : Type.{u}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) 
+          (h : A → B → C → list D)
+
+example : list D :=
+do a ← la,
+   b ← f a,
+   c ← g a b,
+   h a b c
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-11').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+Now think of the computation as representing the list of all possible
+values of the expression <code>h a (f a) (g a (f a))</code>, where the bind
+percolates all possible values of the subexpressions to the final
+output.
+</p>
+
+<p>
+Notice that the final output of the expression is a list, to which we
+can then apply any of the usual functions that deal with lists:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-12' mode="ace/mode/lean" readonly="true">open list
+
+universe u
+variables {A B C D : Type.{u}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) (h : A → B → C → list D)
+
+example : ℕ :=
+length 
+  (do a ← la,
+      b ← f a,
+      c ← g a b,
+      h a b c)
+</juicy-ace-editor><div id='lean-full-code-12' style='display:none'>open list
+
+universe u
+variables {A B C D : Type.{u}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) (h : A → B → C → list D)
+
+example : ℕ :=
+length 
+  (do a ← la,
+      b ← f a,
+      c ← g a b,
+      h a b c)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-12').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+We can also move <code>length</code> inside the <code>do</code> expression, but then the
+output lives in <code>ℕ</code> instead of a <code>list</code>. As a result, we need to use
+<code>return</code> to put the result in a monad:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-13' mode="ace/mode/lean" readonly="true">open list
+
+variables {A B C D : Type.{1}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) 
+          (h : A → B → C → list D)
+
+example : list ℕ :=
+do a ← la, 
+   b ← f a,
+   c ← g a b,
+   return (length (h a b c))
+</juicy-ace-editor><div id='lean-full-code-13' style='display:none'>open list
+
+variables {A B C D : Type.{1}} (la : list A)
+variables (f : A → list B) (g : A → B → list C) 
+          (h : A → B → C → list D)
+
+example : list ℕ :=
+do a ← la, 
+   b ← f a,
+   c ← g a b,
+   return (length (h a b c))
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-13').text());">Try it yourself &raquo;</button></div>
+</div>
+</div>
+</div>
+
+<div id="outline-container-org0e1b233" class="outline-3">
+<h3 id="org0e1b233"><span class="section-number-3"> 7.3</span> The state monad</h3>
+<div class="outline-text-3" id="text-1-3">
+<p>
+Let us indulge in science fiction for a moment, and suppose we wanted
+to extend Lean's programming language with three global registers,
+<code>x</code>, <code>y</code>, and <code>z</code>, each of which stores a natural number. When
+evaluating an expression <code>g (f a)</code> with <code>f : A → B</code> and <code>g : B → C</code>,
+<code>f</code> would start the computation with the registers initialized to <code>0</code>,
+but could read and write values during the course of its
+computation. When <code>g</code> began its computation on <code>f a</code>, the registers
+would be set they way that <code>g</code> left them, and <code>g</code> could continue to
+read and write values. (To avoid questions as to how we would
+interpret the flow of control in terms like <code>h (k₁ a) (k₂ a)</code>, let us
+suppose that we only care about composing unary functions.)
+</p>
+
+<p>
+There is a straightfoward way to implement this behavior in a
+functional programming language, namely, by making the state of the
+three registers an explicit argument. First, let us define a data
+structure to hold the three values, and define the initial settings:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-14' mode="ace/mode/lean" readonly="true">structure registers : Type := (x : ℕ) (y : ℕ) (z : ℕ)
+
+def init_reg : registers := registers.mk 0 0 0
+</juicy-ace-editor><div id='lean-full-code-14' style='display:none'>structure registers : Type := (x : ℕ) (y : ℕ) (z : ℕ)
+
+def init_reg : registers := registers.mk 0 0 0
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-14').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+Now, instead of defining <code>f : A → B</code> that operates on the state of the
+registers implicitly, we would define a function <code>f₀ : A × registers →
+B × registers</code> that operates on it explicitly. The function <code>f₀</code> would
+take an input <code>a : A</code>, paired with the state of the registers at the
+beginning of the computation. It could the do whatever it wanted to
+the state, and return an output <code>b : B</code> paired with the new
+state. Similarly, we would replace <code>g</code> by a function <code>g₀ : B ×
+registers → C × registers</code>. The result of the composite computation
+would be given by <code>(g₀ (f₀ (a, init_reg))).1</code>. In other words, we
+would pair the value <code>a</code> with the initial setting of the registers,
+apply <code>f₀</code> and then <code>g₀</code>, and take the first component. If we wanted
+to lay our hands on the state of the registers at the end of the
+computation, we could do that by taking the second component.
+</p>
+
+<p>
+The biggest problem with this approach is the annoying overhead. To
+write functions this way, we would have to pair and unpair arguments
+and construct the new state explicitly. A key virtue of the monad
+abstraction is that it manages boilerplate operations in situations
+just like these.
+</p>
+
+<p>
+Indeed, the monadic solution is not far away. By currying the input,
+we could take the input of <code>f₀</code> equally well to be <code>A → registers → B
+× registers</code>. Now think of <code>f₀</code> as being a function which takes an
+input in <code>A</code> and returns an element of <code>registers → B ×
+registers</code>. Moreover, think of this output as representing a
+computation which starts with a certain state, and returns a value of
+<code>B</code> and a new state. Lo and behold, <i>that</i> is the relevant monad.
+</p>
+
+<p>
+To be precise: for any type <code>A</code>, the monad <code>m A</code> we are after is
+<code>registers → A × registers</code>. We will call this the state monad for
+<code>registers</code>. With this notation, the function <code>f₀</code> described above has
+type <code>A → m B</code>, the function <code>g₀</code> has type <code>B → m C</code>, and the
+composition of the two on input <code>a</code> is <code>f a &gt;&gt;= g</code>. Notice that the
+result is an element of <code>m C</code>, which is to say, it is a computation
+which takes any state and returns a value of <code>C</code> paired with a new
+state. With <code>do</code> notation, we would express this instead as <code>do b ← f
+a, g b</code>. If we want to leave the monad and extract a value in <code>C</code>, we
+can apply this expression to the initial state <code>init_reg</code>, and take
+the first element of the resulting pair.
+</p>
+
+<p>
+The last thing to notice is that there is nothing special about
+<code>registers</code> here. The same trick would work for any data structure
+that we choose to represent the state of a computation at a given
+point in time. We could describe, for example, registers, a stack, a
+heap, or any combination of these. For every type <code>S</code>, Lean's library
+defines the state monad <code>state S</code> to be the monad that maps any type
+<code>A</code> to the type <code>S → A × S</code>. The particular monad described above is
+then simply <code>state registers</code>.
+</p>
+
+<p>
+Let us consider the <code>return</code> and <code>bind</code> operations. Given any <code>a : A</code>,
+<code>return a</code> is given by <code>λ s, (a, s)</code>. This represents the
+computation which takes any state <code>s</code>, leaves it unchanged, and
+inserts <code>a</code> as the return value. The value of <code>bind</code> is tricker. Given
+an <code>sa : state S A</code> and an <code>f : A → state S B</code>, remember that <code>bind sa
+f</code> is supposed to "reach into the box," extract an element <code>a</code> from
+<code>sa</code>, and apply <code>f</code> to it inside the monad. Now, the result of <code>bind
+sa f</code> is supposed to be an element of <code>state S B</code>, which is really a
+function <code>S → B × S</code>. In other words, <code>bind sa f</code> is supposed to
+encode a function which operates on any state to produce an element of
+<code>B</code> tonad a new state. Doing so is straightforward: given any
+state <code>s</code>, <code>sa s</code> consists of a pair <code>(a, s₀)</code>, and applying <code>f</code> to
+<code>a</code> and then <code>s₀</code> yields the required element of <code>B × S</code>. Thus the
+def of <code>bind sa f</code> is as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-15' mode="ace/mode/lean" readonly="true">λ s, match (sa s) with (a, s₀) := b a s₀
+</juicy-ace-editor><div id='lean-full-code-15' style='display:none'>λ s, match (sa s) with (a, s₀) := b a s₀
+</div>
+</div>
+
+<p>
+The library also defines operations <code>read</code> and <code>write</code> as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-16' mode="ace/mode/lean" readonly="true">def read {S : Type} : state S S :=
+λ s, (s, s)
+
+def write {S : Type} : S → state S unit :=
+λ s₀ s, ((), s₀)
+</juicy-ace-editor><div id='lean-full-code-16' style='display:none'>def read {S : Type} : state S S :=
+λ s, (s, s)
+
+def write {S : Type} : S → state S unit :=
+λ s₀ s, ((), s₀)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-16').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+With the argument <code>S</code> implicit, <code>read</code> is simply the state computation
+that does not change the current state, but also returns it as a
+value.  The value <code>write s₀</code> is the state computation which replaces
+any state <code>s</code> by <code>s₀</code> and returns <code>unit</code>. Notice that it is convenient
+to use <code>unit</code> for the output type any operation that does not return a
+value, though it may change the state.
+</p>
+
+<p>
+Returning to our example, we can implement the register state monad
+and more focused read and write operations as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-17' mode="ace/mode/lean" readonly="true">def init_reg : registers :=
+registers.mk 0 0 0
+
+@[reducible] def reg_state := state registers
+
+def read_x : reg_state ℕ :=
+do s ← read, return (registers.x s)
+
+def read_y : reg_state ℕ :=
+do s ← read, return (registers.y s)
+
+def read_z : reg_state ℕ :=
+do s ← read, return (registers.z s)
+
+def write_x (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk n (registers.y s) (registers.z s))
+
+def write_y (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write(registers.mk (registers.x s) n (registers.z s))
+
+def write_z (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk (registers.x s) (registers.y s) n)</juicy-ace-editor><div id='lean-full-code-17' style='display:none'>open state
+
+structure registers : Type := (x : ℕ) (y : ℕ) (z : ℕ)
+
+def init_reg : registers :=
+registers.mk 0 0 0
+
+@[reducible] def reg_state := state registers
+
+def read_x : reg_state ℕ :=
+do s ← read, return (registers.x s)
+
+def read_y : reg_state ℕ :=
+do s ← read, return (registers.y s)
+
+def read_z : reg_state ℕ :=
+do s ← read, return (registers.z s)
+
+def write_x (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk n (registers.y s) (registers.z s))
+
+def write_y (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write(registers.mk (registers.x s) n (registers.z s))
+
+def write_z (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk (registers.x s) (registers.y s) n)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-17').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+We can then write a little register program as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-18' mode="ace/mode/lean" readonly="true">open nat
+
+def foo : reg_state ℕ :=
+do write_x 5,
+   write_y 7,
+   x ← read_x,
+   write_z (x + 3),
+   y ← read_y,
+   z ← read_z,
+   write_y (y + z),
+   y ← read_y,
+   return (y + 2)</juicy-ace-editor><div id='lean-full-code-18' style='display:none'>open state
+
+structure registers : Type := (x : ℕ) (y : ℕ) (z : ℕ)
+
+def init_reg : registers :=
+registers.mk 0 0 0
+
+@[reducible] def reg_state := state registers
+
+def read_x : reg_state ℕ :=
+do s ← read, return (registers.x s)
+
+def read_y : reg_state ℕ :=
+do s ← read, return (registers.y s)
+
+def read_z : reg_state ℕ :=
+do s ← read, return (registers.z s)
+
+def write_x (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk n (registers.y s) (registers.z s))
+
+def write_y (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write(registers.mk (registers.x s) n (registers.z s))
+
+def write_z (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk (registers.x s) (registers.y s) n)
+
+open nat
+
+def foo : reg_state ℕ :=
+do write_x 5,
+   write_y 7,
+   x ← read_x,
+   write_z (x + 3),
+   y ← read_y,
+   z ← read_z,
+   write_y (y + z),
+   y ← read_y,
+   return (y + 2)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-18').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+To see the results of this program, we have to "run" it on the initial
+state:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-19' mode="ace/mode/lean" readonly="true">eval foo init_reg</juicy-ace-editor><div id='lean-full-code-19' style='display:none'>open state
+
+structure registers : Type := (x : ℕ) (y : ℕ) (z : ℕ)
+
+def init_reg : registers :=
+registers.mk 0 0 0
+
+@[reducible] def reg_state := state registers
+
+def read_x : reg_state ℕ :=
+do s ← read, return (registers.x s)
+
+def read_y : reg_state ℕ :=
+do s ← read, return (registers.y s)
+
+def read_z : reg_state ℕ :=
+do s ← read, return (registers.z s)
+
+def write_x (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk n (registers.y s) (registers.z s))
+
+def write_y (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write(registers.mk (registers.x s) n (registers.z s))
+
+def write_z (n : ℕ) : reg_state unit :=
+do s ← read, 
+   write (registers.mk (registers.x s) (registers.y s) n)
+
+open nat
+
+def foo : reg_state ℕ :=
+do write_x 5,
+   write_y 7,
+   x ← read_x,
+   write_z (x + 3),
+   y ← read_y,
+   z ← read_z,
+   write_y (y + z),
+   y ← read_y,
+   return (y + 2)
+
+eval foo init_reg
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-19').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The result is the pair <code>(15, registers.mk 5 15 8)</code>, consisting of the
+return value, <code>y</code>, paired with the values of the three registers.
+</p>
+</div>
+</div>
+
+<div id="outline-container-orgc8c6ed3" class="outline-3">
+<h3 id="orgc8c6ed3"><span class="section-number-3"> 7.4</span> The IO monad</h3>
+<div class="outline-text-3" id="text-1-4">
+<p>
+We can finally explain how Lean handles input and output: the constant
+<code>IO</code> is axiomatically declared to be a monad with certain supporting
+operations. It is a kind of state monad, but in contrast to the ones
+discussed in the last section, here the state is entirely opaque to
+Lean. You can think of the state as "the real world," or, at least,
+the status of interaction with the user. Lean's axiomatically declared
+constants include the following:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-20' mode="ace/mode/lean" readonly="true">constant put_str : string → IO unit
+constant put_nat : nat → IO unit
+constant get_line : IO string</juicy-ace-editor><div id='lean-full-code-20' style='display:none'>import system.IO
+
+namespace hide
+constant put_str : string → IO unit
+constant put_nat : nat → IO unit
+constant get_line : IO string
+end hide
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-20').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The expression <code>put_str s</code> changes the <code>IO</code> state by writing <code>s</code> to
+output; the return type, <code>unit</code>, indicates that no meaningful value is
+returned. The expression <code>put_nat n</code> does the analogous thing for a
+natural number, <code>n</code>. The expression <code>get_line</code>, in contrast; however
+you want to think of the change in <code>IO</code> state, a <code>string</code> value is
+returned inside the monad. Again, thinking of the <code>IO</code> monad as
+representing a state is somewhat heuristic, since within the Lean
+language, there is nothing that we can say about it. But when we run a
+Lean program , the interpreter does the right thing whenever it
+encounters the bind and return operations for the monad, as well as
+the constants above. In particular, in the example below, it ensures
+that the argument to <code>put_nat</code> is evaluated before the output is sent
+to the user, and that the expressions are printed in the right order.
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-21' mode="ace/mode/lean" readonly="true">vm_eval do put_str "hello " &gt;&gt; put_str "world!" &gt;&gt; put_nat (27 * 39)</juicy-ace-editor><div id='lean-full-code-21' style='display:none'>import system.IO
+
+vm_eval do put_str "hello " &gt;&gt; put_str "world!" &gt;&gt; put_nat (27 * 39)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-21').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+[TODO: somewhere &#x2013; probably in a later chapter? &#x2013; document the
+format type and operations.]
+</p>
+</div>
+</div>
+
+<div id="outline-container-org50accbf" class="outline-3">
+<h3 id="org50accbf"><span class="section-number-3"> 7.5</span> Related type classes</h3>
+<div class="outline-text-3" id="text-1-5">
+<p>
+In addition to the monad type class, Lean defines all the following
+abstract type classes and notations.
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-22' mode="ace/mode/lean" readonly="true">universe variables u v
+
+class functor (F : Type u → Type v) : Type (max u+1 v) :=
+(map : Π {A B : Type u}, (A → B) → F A → F B)
+
+@[inline] def fmap {F : Type u → Type v} [functor F] {A B : Type u} : (A → B) → F A → F B :=
+functor.map
+
+infixr ` &lt;$&gt; `:100 := fmap
+
+class applicative (F : Type u → Type v) extends functor F : Type (max u+1 v):=
+(pure : Π {A : Type u}, A → F A)
+(seq  : Π {A B : Type u}, F (A → B) → F A → F B)
+
+@[inline] def pure {F : Type u → Type v} [applicative F] {A : Type u} : A → F A :=
+applicative.pure F
+
+@[inline] def seq_app {A B : Type u} {F : Type u → Type v} [applicative F] : F (A → B) → F A → F B :=
+applicative.seq
+
+infixr ` &lt;*&gt; `:2 := seq_app
+
+class alternative (F : Type u → Type v) extends applicative F : Type (max u+1 v) :=
+(failure : Π {A : Type u}, F A)
+(orelse  : Π {A : Type u}, F A → F A → F A)
+
+@[inline] def failure {F : Type u → Type v} [alternative F] {A : Type u} : F A :=
+alternative.failure F
+
+@[inline] def orelse {F : Type u → Type v} [alternative F] {A : Type u} : F A → F A → F A :=
+alternative.orelse
+
+infixr ` &lt;|&gt; `:2 := orelse
+
+@[inline] def guard {F : Type → Type v} [alternative F] (P : Prop) [decidable P] : F unit :=
+if P then pure () else failure
+</juicy-ace-editor><div id='lean-full-code-22' style='display:none'>open monad
+namespace hide
+universe variables u v
+
+class functor (F : Type u → Type v) : Type (max u+1 v) :=
+(map : Π {A B : Type u}, (A → B) → F A → F B)
+
+@[inline] def fmap {F : Type u → Type v} [functor F] {A B : Type u} : (A → B) → F A → F B :=
+functor.map
+
+infixr ` &lt;$&gt; `:100 := fmap
+
+class applicative (F : Type u → Type v) extends functor F : Type (max u+1 v):=
+(pure : Π {A : Type u}, A → F A)
+(seq  : Π {A B : Type u}, F (A → B) → F A → F B)
+
+@[inline] def pure {F : Type u → Type v} [applicative F] {A : Type u} : A → F A :=
+applicative.pure F
+
+@[inline] def seq_app {A B : Type u} {F : Type u → Type v} [applicative F] : F (A → B) → F A → F B :=
+applicative.seq
+
+infixr ` &lt;*&gt; `:2 := seq_app
+
+class alternative (F : Type u → Type v) extends applicative F : Type (max u+1 v) :=
+(failure : Π {A : Type u}, F A)
+(orelse  : Π {A : Type u}, F A → F A → F A)
+
+@[inline] def failure {F : Type u → Type v} [alternative F] {A : Type u} : F A :=
+alternative.failure F
+
+@[inline] def orelse {F : Type u → Type v} [alternative F] {A : Type u} : F A → F A → F A :=
+alternative.orelse
+
+infixr ` &lt;|&gt; `:2 := orelse
+
+@[inline] def guard {F : Type → Type v} [alternative F] (P : Prop) [decidable P] : F unit :=
+if P then pure () else failure
+
+end hide
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-22').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The <code>monad</code> class extends both <code>functor</code> and <code>applicative</code>, so both of
+these can be seen as even more abstract versions of <code>monad</code>. On the
+other hand, not every <code>monad</code> is alternative, and in the next chapter
+we will see an important example of one that is. One way to think
+about an alternative monad is to think of it as representing
+computations that can possibly fail, and, moreover, Intuitively, an
+alternative monad can be thought of supporting definitions that say
+"try <code>a</code> first, and if that doesn't work, try <code>b</code>." A good example is
+the <code>option</code> monad, in which we can think of an element <code>none</code> as a
+computation that has failed. If <code>a</code> and <code>b</code> are elements of <code>option A</code>
+for some type <code>A</code>, we can define <code>a &lt;|&gt; b</code> to have the value <code>a</code> if
+<code>a</code> is of the form <code>some a₀</code>, and <code>b</code> otherwise. 
+</p>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>

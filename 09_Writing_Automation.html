@@ -1,0 +1,1136 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"
+"http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">
+<head>
+<!-- 2016-11-28 Mon 13:51 -->
+<meta http-equiv="Content-Type" content="text/html;charset=utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Programming in Lean</title>
+<meta name="generator" content="Org mode" />
+<meta name="author" content="[[http://www.andrew.cmu.edu/user/avigad][Jeremy Avigad]]Jeremy Avigad, [[http://leodemoura.github.io][Leonardo de Moura]]Leonardo de Moura, Jared Roesch" />
+<link rel="stylesheet" href="css/tutorial.css"/>
+<link rel="stylesheet" href="css/code.css"/>
+<script type="text/javascript" charset="utf-8">if(!window.PolymerGestures) { var head = document.getElementsByTagName('head')[0]; var js = document.createElement("script"); js.type = "text/javascript"; js.src = "//cdn.jsdelivr.net/webcomponentsjs/0.7.20/webcomponents.min.js"; head.appendChild(js); } </script>
+<link rel='import' href='juicy-ace-editor.html'/>
+</head>
+<body>
+<div id="content">
+<h1 class="title">Programming in Lean</h1>
+
+<div id="outline-container-org5fb73fd" class="outline-2">
+<h2 id="Writing_Automation"><a id="org5fb73fd"></a><span class="section-number-2"> 9</span> Writing Automation</h2>
+<div class="outline-text-2" id="text-Writing_Automation">
+<p>
+The goal of this chapter is to provide some examples that illustrate
+the ways that metaprogramming in Lean can be used to implement
+automated proof procedures.
+</p>
+</div>
+
+<div id="outline-container-org607ce03" class="outline-3">
+<h3 id="org607ce03"><span class="section-number-3"> 9.1</span> A Tableau Prover for Classical Propositional Logic</h3>
+<div class="outline-text-3" id="text-1-1">
+<p>
+In this section, we design a theorem prover that is complete for
+classical propositional logic. The method is essentially that of
+tableaux theorem proving, and, from a proof-theoretic standpoint, can
+be used to demonstrate the completeness of cut-free sequent
+calculi. 
+</p>
+
+<p>
+The idea is simple. If <code>A</code>, <code>B</code>, <code>C</code>, and <code>D</code> are formulas of
+propositional logic, the sequent <code>A, B, C ⊢ D</code> represents the goal of
+proving that <code>D</code> follows from <code>A</code>, <code>B</code> and <code>C</code>, and <code>D</code>. The fact that
+they are propositional formulas means that they are built up from
+variables of type <code>Prop</code> and the constants <code>true</code> and <code>false</code> using
+the connectives <code>∧ ∨ → ↔ ¬</code>. The proof procedure proceeds as follows:
+</p>
+
+<ul class="org-ul">
+<li>Negate the conclusion, so that the goal becomes <code>A, B, C, ¬ D ⊢
+  false</code>.</li>
+
+<li>Put all formulas into <i>negation-normal form</i>. In other words,
+eliminate <code>→</code> and <code>↔</code> in terms of the other connectives, and using
+classical identities to push all equivalences inwards.</li>
+
+<li>At that stage, all formulas are built up from <i>literals</i>
+(propositional variables and negated propositional variables) using
+only <code>∧</code> and <code>∨</code>. Now repeatedly apply all of the following proof
+steps:
+
+<ul class="org-ul">
+<li>Reduce a goal of the form <code>Γ, A ∧ B ⊢ false</code> to the goal 
+<code>Γ, A, B ⊢ false</code>, where <code>Γ</code> is any set of propositional formulas.</li>
+
+<li>Reduce a goal of the form <code>Γ, A ∨ B ⊢ false</code> to the pair of
+goals <code>Γ, A ⊢ false</code> and <code>Γ, B ⊢ false</code>.</li>
+
+<li>Prove any goal of the form <code>Γ, A, ¬ A ⊢ false</code> in the usual way.</li>
+</ul></li>
+</ul>
+
+<p>
+It is not hard to show that this is complete. Each step preserves
+validity, in the sense that the original goal is provable if and only
+if the new ones are. And, in each step, the number of connectives in
+the goal decreases. If we ever face a goal in which the first two
+rules do not apply, the goal must consist of literals. In that case,
+if the last rule doesn't apply, then no propositional variable appears
+with its negation, and it is easy to cook up a truth assignment that
+falsifies the goal.
+</p>
+
+<p>
+In fact, our procedure will work with arbitrary formulas at the
+leaves. It simply applies reductions and rules as much as possible, so
+formulas that begin with anything other than a propositional
+connective are treated as black boxes, and act as propositional atoms.
+</p>
+
+<p>
+First, let us open the namespaces we will use:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-1' mode="ace/mode/lean" readonly="true">open expr tactic classical
+</juicy-ace-editor><div id='lean-full-code-1' style='display:none'>open expr tactic classical
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-1').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+The next step is to gather all the facts we will need to put formulas
+in negation-normal form.
+</p>
+
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-2' mode="ace/mode/lean" readonly="true">section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences</juicy-ace-editor><div id='lean-full-code-2' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-2').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+One way to implement the reduction to negation-normal form is to use
+equational rewriting. So, for convenience, we gather equational
+versions of the identities we need:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-3' mode="ace/mode/lean" readonly="true">section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules</juicy-ace-editor><div id='lean-full-code-3' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-3').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+Normalizing a formula is then just a matter of applying these as rewrite rules repeatedly:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-4' mode="ace/mode/lean" readonly="true">meta def normalize_hyp (hyp : expr) : tactic unit :=
+let h_name := local_pp_name hyp in
+do repeat (rewrite_at ``iff_eq h_name),
+   repeat (rewrite_at ``implies_eq h_name),
+   repeat ((rewrite_at ``not_and_eq h_name) &lt;|&gt; (rewrite_at ``not_or_eq h_name)),
+   repeat (rewrite_at ``not_not_eq h_name),
+   repeat (rewrite_at ``not_true_eq h_name),
+   repeat (rewrite_at ``not_false_eq h_name)</juicy-ace-editor><div id='lean-full-code-4' style='display:none'>open expr tactic list classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+let h_name := local_pp_name hyp in
+do repeat (rewrite_at ``iff_eq h_name),
+   repeat (rewrite_at ``implies_eq h_name),
+   repeat ((rewrite_at ``not_and_eq h_name) &lt;|&gt; (rewrite_at ``not_or_eq h_name)),
+   repeat (rewrite_at ``not_not_eq h_name),
+   repeat (rewrite_at ``not_true_eq h_name),
+   repeat (rewrite_at ``not_false_eq h_name)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-4').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+We can try it out:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-5' mode="ace/mode/lean" readonly="true">example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do hyp₁ ← get_local `h₁,
+      hyp₂ ← get_local `h₂,
+      normalize_hyp hyp₁,
+      normalize_hyp hyp₂,
+      trace_state,
+      triv</juicy-ace-editor><div id='lean-full-code-5' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+let h_name := local_pp_name hyp in
+do repeat (rewrite_at ``iff_eq h_name),
+   repeat (rewrite_at ``implies_eq h_name),
+   repeat ((rewrite_at ``not_and_eq h_name) &lt;|&gt; (rewrite_at ``not_or_eq h_name)),
+   repeat (rewrite_at ``not_not_eq h_name),
+   repeat (rewrite_at ``not_true_eq h_name),
+   repeat (rewrite_at ``not_false_eq h_name)
+
+example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do hyp₁ ← get_local `h₁,
+      hyp₂ ← get_local `h₂,
+      normalize_hyp hyp₁,
+      normalize_hyp hyp₂,
+      trace_state,
+      triv
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-5').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The output is as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-6' mode="ace/mode/lean" readonly="true">p q r : Prop,
+h₁ : p ∧ (¬q ∨ r) ∨ (q ∧ ¬r) ∧ ¬p,
+h₂ : p ∧ q ∧ r
+⊢ true
+</juicy-ace-editor><div id='lean-full-code-6' style='display:none'>p q r : Prop,
+h₁ : p ∧ (¬q ∨ r) ∨ (q ∧ ¬r) ∧ ¬p,
+h₂ : p ∧ q ∧ r
+⊢ true
+</div>
+</div>
+
+<p>
+A more efficient way is to use Lean's built-in simplifier to do the work for us. 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-7' mode="ace/mode/lean" readonly="true">meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, ``not_or_eq, ``not_not_eq,
+                            ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)</juicy-ace-editor><div id='lean-full-code-7' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, ``not_or_eq, ``not_not_eq,
+                            ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-7').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The first line of the tactic turns the list of names into a list of
+expressions, by applying the <code>mk_const</code> tactic to each one, and
+returning the resulting list inside the tactic monad. The line <code>try
+(simp_at_using l hyp)</code> applies these simplification rules at the
+hypothesis <code>hyp</code>; the <code>try</code> combinator ensures that the tactic is
+deemed successful even if no simplifications are necessary. Once
+again, we can test the result:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-8' mode="ace/mode/lean" readonly="true">example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do hyp₁ ← get_local `h₁,
+      hyp₂ ← get_local `h₂,
+      normalize_hyp hyp₁,
+      normalize_hyp hyp₂,
+      trace_state,
+      triv</juicy-ace-editor><div id='lean-full-code-8' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, ``not_or_eq, ``not_not_eq,
+                            ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)
+
+example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do hyp₁ ← get_local `h₁,
+      hyp₂ ← get_local `h₂,
+      normalize_hyp hyp₁,
+      normalize_hyp hyp₂,
+      trace_state,
+      triv
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-8').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The result is the same as before. The following tactic,
+<code>normalize_hyps</code>, applies these reductions to each hypothesis in the
+local context.
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-9' mode="ace/mode/lean" readonly="true">meta def normalize_hyps : tactic unit :=
+do l ← local_context,
+   monad.forM' l normalize_hyp
+
+example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do normalize_hyps,
+      trace_state,
+      triv</juicy-ace-editor><div id='lean-full-code-9' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, ``not_or_eq, ``not_not_eq,
+                            ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)
+
+meta def normalize_hyps : tactic unit :=
+do l ← local_context,
+   monad.forM' l normalize_hyp
+
+example (p q r : Prop) (h₁ : ¬ (p ↔ (q ∧ ¬ r))) (h₂ : ¬ (p → (q → ¬ r))) : true :=
+by do normalize_hyps,
+      trace_state,
+      triv
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-9').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+The <code>forM</code>' tactic, like the <code>forM</code> tactic, applies the second
+argument to each element of the first, but it returns unit rather than
+accumulate the results in a list.
+</p>
+
+<p>
+The next three tactics handle the task of splitting conjunctions.
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-10' mode="ace/mode/lean" readonly="true">open tactic expr
+
+meta def add_fact (prf : expr) : tactic unit :=
+do nh ← get_unused_name `h none,
+   p ← infer_type prf,
+   assertv nh p prf
+
+meta def split_conj_at (h : expr) : tactic unit :=
+do to_expr `(and.left %%h) &gt;&gt;= add_fact,
+   to_expr `(and.right %%h) &gt;&gt;= add_fact,
+   clear h
+
+meta def find_and_split_conj : tactic unit :=
+do l ← local_context,
+   first $ l^.for 
+     (λ h, do e ← infer_type h,
+            cond (is_app_of e `and) (split_conj_at h) failed)
+</juicy-ace-editor><div id='lean-full-code-10' style='display:none'>open tactic expr
+
+meta def add_fact (prf : expr) : tactic unit :=
+do nh ← get_unused_name `h none,
+   p ← infer_type prf,
+   assertv nh p prf
+
+meta def split_conj_at (h : expr) : tactic unit :=
+do to_expr `(and.left %%h) &gt;&gt;= add_fact,
+   to_expr `(and.right %%h) &gt;&gt;= add_fact,
+   clear h
+
+meta def find_and_split_conj : tactic unit :=
+do l ← local_context,
+   first $ l^.for 
+     (λ h, do e ← infer_type h,
+            cond (is_app_of e `and) (split_conj_at h) failed)
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-10').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The tactic <code>add_fact prf</code> takes a proof of a proposition <code>p</code>, and adds
+<code>p</code> the the local context with a fresh name. The tactic
+<code>get_unused_name `h none</code> generates a fresh name of the form <code>h_n</code>,
+for a numeral <code>n</code>. Assuming <code>h</code> denotes a hypothesis in the local
+context, the tactic <code>split_conj_at h</code> splits the conjunction by adding
+both the left and right consequences to the context, and then clearing
+<code>h</code> itself. Finally, the tactic <code>find_and_split_conj</code> searches for a
+hypothesis <code>h : a ∧ b</code> in the local context and splits it, or fails if
+there is no such hypothesis. We will can therefore split all the
+conjunctions in the local context by applying this tactic repeatedly,
+until it fails.
+</p>
+
+<p>
+We need two more small tactics before we can write our propositional
+prover. The first reduces the task of proving a statement <code>p</code> from some
+hypotheses to the task of proving falsity from those hypotheses and
+the negation of <code>p</code>. 
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-11' mode="ace/mode/lean" readonly="true">meta def deny_conclusion : tactic unit :=
+do refine `(classical.by_contradiction _),
+   nh ← get_unused_name `h none,
+   intro nh,
+   return ()</juicy-ace-editor><div id='lean-full-code-11' style='display:none'>open tactic expr
+
+meta def deny_conclusion : tactic unit :=
+do refine `(classical.by_contradiction _),
+   nh ← get_unused_name `h none,
+   intro nh,
+   return ()
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-11').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The refine tactic applies the expression in
+question to the goal, but leaves any remaining metavariables for us to
+fill. The theorem <code>classical.by_contradiction</code> has type <code>∀ {p : Prop},
+(¬p → false) → p</code>, so applying this theorem proves the goal but leaves
+us with the new goal of proving <code>¬p → false</code> from the same hypotheses,
+at which point, we can use the introduction rule for implication. If
+we omit the <code>return ()</code>, we will get an error message, because
+<code>deny_conclusion</code> is supposed to have type <code>tactic unit</code>, but the
+<code>intro</code> tactic returns an expression.
+</p>
+
+<p>
+The next tactic find a disjunction among the hypotheses, or returns
+the <code>option.none</code> if there aren't any.
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-12' mode="ace/mode/lean" readonly="true">meta def find_disj : tactic (option expr) :=
+do l ← local_context,
+   (first $ l^.for
+     (λ h, do t ← infer_type h,
+              cond (is_app_of t `or) 
+                (return (option.some h)) failed)) &lt;|&gt;
+   return none</juicy-ace-editor><div id='lean-full-code-12' style='display:none'>open tactic expr
+
+meta def find_disj : tactic (option expr) :=
+do l ← local_context,
+   (first $ l^.for
+     (λ h, do t ← infer_type h,
+              cond (is_app_of t `or) 
+                (return (option.some h)) failed)) &lt;|&gt;
+   return none
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-12').text());">Try it yourself &raquo;</button></div>
+</div>
+
+<p>
+Our propositional prover can now be implemented as follows:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-13' mode="ace/mode/lean" readonly="true">meta def prop_prover_aux : ℕ → tactic unit
+| 0            :=  fail "prop prover max depth reached"
+| (nat.succ n) :=
+  do repeat find_and_split_conj,
+     contradiction &lt;|&gt;
+     do (option.some h) ← find_disj | 
+          fail "prop_prover failed: unprovable goal",
+        cases h, 
+        prop_prover_aux n,
+        prop_prover_aux n
+
+meta def prop_prover : tactic unit :=
+do deny_conclusion,
+   normalize_hyps,
+   prop_prover_aux 30</juicy-ace-editor><div id='lean-full-code-13' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro.
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, 
+         ``not_or_eq, ``not_not_eq, ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)
+
+meta def normalize_hyps : tactic unit :=
+do l ← local_context,
+   monad.forM' l normalize_hyp
+
+meta def add_fact (prf : expr) : tactic unit :=
+do nh ← get_unused_name `h none,
+   p ← infer_type prf,
+   assertv nh p prf
+
+meta def split_conj_at (h : expr) : tactic unit :=
+do to_expr `(and.left %%h) &gt;&gt;= add_fact,
+   to_expr `(and.right %%h) &gt;&gt;= add_fact,
+   clear h
+
+meta def find_and_split_conj : tactic unit :=
+do l ← local_context,
+   first $ l^.for 
+     (λ h, do e ← infer_type h,
+            cond (is_app_of e `and) (split_conj_at h) failed)
+
+meta def deny_conclusion : tactic unit :=
+do refine `(classical.by_contradiction _),
+   nh ← get_unused_name `h none,
+   intro nh,
+   return ()
+
+meta def find_disj : tactic (option expr) :=
+do l ← local_context,
+   (first $ l^.for
+     (λ h, do t ← infer_type h,
+              cond (is_app_of t `or) 
+                (return (option.some h)) failed)) &lt;|&gt;
+   return none
+
+meta def prop_prover_aux : ℕ → tactic unit
+| 0            :=  fail "prop prover max depth reached"
+| (nat.succ n) :=
+  do repeat find_and_split_conj,
+     contradiction &lt;|&gt;
+     do (option.some h) ← find_disj | 
+          fail "prop_prover failed: unprovable goal",
+        cases h, 
+        prop_prover_aux n,
+        prop_prover_aux n
+
+meta def prop_prover : tactic unit :=
+do deny_conclusion,
+   normalize_hyps,
+   prop_prover_aux 30
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-13').text());">Try it yourself &raquo;</button></div>
+</div>
+<p>
+The tactic <code>prop_prover</code> denies the conclusion, reduces the hypotheses
+to negation-normal form, and calls <code>prop_prover_aux</code> with a maximum
+splitting depth of 30. The tactic <code>prop_prover_aux</code> executes the
+following simple loop. First, it splits any conjunctions in the
+hypotheses. Then it tries applying the <code>contradiction</code> tactic, which
+will find a pair of contradictory literals, <code>p</code> and <code>¬ p</code>, if there is
+one. If that does not succeed, it looks for a disjunction <code>h</code> among
+the hypotheses. At this stage, if there aren't any disjunctions, we
+know that the goal is not propositionally valid. On the other hand, if
+there is a disjunction, <code>prop_prover_aux</code> calls the <code>cases</code> tactic to
+split the disjunction, and then applies itself recursively to each of
+the resulting subgoals, decreasing the splitting depth by one.
+</p>
+
+<p>
+Notice the pattern matching in the <code>do</code> notation:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-14' mode="ace/mode/lean" readonly="true">(option.some h) ← find_disj | 
+          fail "prop_prover failed: unprovable goal"
+</juicy-ace-editor><div id='lean-full-code-14' style='display:none'>(option.some h) ← find_disj | 
+          fail "prop_prover failed: unprovable goal"
+</div>
+</div>
+<p>
+This is shorthand for the use of the <code>bind</code> operation in the
+tactic monad to extract the result of <code>find_disj</code>, together with
+the use of a <code>match</code> statement to extract the result. The expression
+after the vertical bar is the value returned for any other case in the
+pattern match; in this case, it is the value returned if <code>find_disj</code>
+returns <code>none</code>. This is a common idiom when writing tactics, and so
+the compressed notation is handy. 
+</p>
+
+<p>
+All this is left for us to do is to try it out:
+</p>
+<div class="org-src-container">
+<juicy-ace-editor id='lean-juicy-ace-editor-15' mode="ace/mode/lean" readonly="true">section
+  variables A B C D : Prop
+
+  example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∨ C :=
+  by prop_prover
+
+  example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∧ ¬ C :=
+  by prop_prover
+
+  -- not valid
+  -- example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∧ C :=
+  -- by prop_prover
+
+  example : ((A → B) → A) → A :=
+  by prop_prover
+
+  example : (A → B) ∧ (B → C) → A → C :=
+  by prop_prover
+
+  example (X : Type) (x y z w : X) : 
+    x = y ∧ (x = y → z = w) → z = w :=
+  by prop_prover
+
+  example : ¬ (A ↔ ¬ A) :=
+  by prop_prover
+
+  -- example : A ∧ (A → B) → (¬ C → ¬ C) → C :=
+  -- by prop_prover
+end</juicy-ace-editor><div id='lean-full-code-15' style='display:none'>open expr tactic classical
+
+section logical_equivalences
+  local attribute [instance] prop_decidable
+  variables {a b : Prop}
+
+  theorem not_not_iff (a : Prop) : ¬¬a ↔ a :=
+  iff.intro classical.by_contradiction not_not_intro.
+
+  theorem implies_iff_not_or (a b : Prop) : (a → b) ↔ (¬ a ∨ b) :=
+  iff.intro
+    (λ h, if ha : a then or.inr (h ha) else or.inl ha)
+    (λ h, or.elim h (λ hna ha, absurd ha hna) (λ hb ha, hb))
+
+  theorem not_and_of_not_or_not (h : ¬ a ∨ ¬ b) : ¬ (a ∧ b) :=
+  assume ⟨ha, hb⟩, or.elim h (assume hna, hna ha) (assume hnb, hnb hb)
+
+  theorem not_or_not_of_not_and (h : ¬ (a ∧ b)) : ¬ a ∨ ¬ b :=
+  if ha : a then
+    or.inr (show ¬ b, from assume hb, h ⟨ha, hb⟩)
+  else
+    or.inl ha
+
+  theorem not_and_iff (a b : Prop) : ¬ (a ∧ b) ↔ ¬a ∨ ¬b :=
+  iff.intro not_or_not_of_not_and not_and_of_not_or_not
+
+  theorem not_or_of_not_and_not (h : ¬ a ∧ ¬ b) : ¬ (a ∨ b) :=
+  assume h₁, or.elim h₁ (assume ha, h^.left ha) (assume hb, h^.right hb)
+
+  theorem not_and_not_of_not_or (h : ¬ (a ∨ b)) : ¬ a ∧ ¬ b :=
+  and.intro (assume ha, h (or.inl ha)) (assume hb, h (or.inr hb))
+
+  theorem not_or_iff (a b : Prop) : ¬ (a ∨ b) ↔ ¬ a ∧ ¬ b :=
+  iff.intro not_and_not_of_not_or not_or_of_not_and_not
+end logical_equivalences
+
+section logical_rewrite_rules
+  theorem not_not_eq (A : Prop) : (¬ ¬ A) = A :=
+  propext (not_not_iff A)
+
+  theorem iff_eq (A B : Prop) : (A ↔ B) = ((A → B) ∧ (B → A)) := rfl
+
+  theorem implies_eq (A B : Prop) : (A → B) = (¬ A ∨ B) :=
+  propext (implies_iff_not_or A B)
+
+  theorem not_and_eq (A B : Prop) : (¬ (A ∧ B)) = (¬ A ∨ ¬ B) :=
+  propext (not_and_iff A B)
+
+  theorem not_or_eq (A B : Prop) : (¬ (A ∨ B)) = (¬ A ∧ ¬ B) :=
+  propext (not_or_iff A B)
+
+  theorem not_true_eq : (¬ true) = false := propext not_true
+
+  theorem not_false_eq : (¬ false) = true := propext not_false_iff
+end logical_rewrite_rules
+
+meta def normalize_hyp (hyp : expr) : tactic unit :=
+do l ← monad.mapM mk_const [``iff_eq, ``implies_eq, ``not_and_eq, 
+         ``not_or_eq, ``not_not_eq, ``not_true_eq, ``not_false_eq],
+   try (simp_at_using l hyp)
+
+meta def normalize_hyps : tactic unit :=
+do l ← local_context,
+   monad.forM' l normalize_hyp
+
+meta def add_fact (prf : expr) : tactic unit :=
+do nh ← get_unused_name `h none,
+   p ← infer_type prf,
+   assertv nh p prf
+
+meta def split_conj_at (h : expr) : tactic unit :=
+do to_expr `(and.left %%h) &gt;&gt;= add_fact,
+   to_expr `(and.right %%h) &gt;&gt;= add_fact,
+   clear h
+
+meta def find_and_split_conj : tactic unit :=
+do l ← local_context,
+   first $ l^.for 
+     (λ h, do e ← infer_type h,
+            cond (is_app_of e `and) (split_conj_at h) failed)
+
+meta def deny_conclusion : tactic unit :=
+do refine `(classical.by_contradiction _),
+   nh ← get_unused_name `h none,
+   intro nh,
+   return ()
+
+meta def find_disj : tactic (option expr) :=
+do l ← local_context,
+   (first $ l^.for
+     (λ h, do t ← infer_type h,
+              cond (is_app_of t `or) 
+                (return (option.some h)) failed)) &lt;|&gt;
+   return none
+
+meta def prop_prover_aux : ℕ → tactic unit
+| 0            :=  fail "prop prover max depth reached"
+| (nat.succ n) :=
+  do repeat find_and_split_conj,
+     contradiction &lt;|&gt;
+     do (option.some h) ← find_disj | 
+          fail "prop_prover failed: unprovable goal",
+        cases h, 
+        prop_prover_aux n,
+        prop_prover_aux n
+
+meta def prop_prover : tactic unit :=
+do deny_conclusion,
+   normalize_hyps,
+   prop_prover_aux 30
+
+section
+  variables A B C D : Prop
+
+  example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∨ C :=
+  by prop_prover
+
+  example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∧ ¬ C :=
+  by prop_prover
+
+  -- not valid
+  -- example (h₁ : A ∧ B) (h₂ : B ∧ ¬ C) : A ∧ C :=
+  -- by prop_prover
+
+  example : ((A → B) → A) → A :=
+  by prop_prover
+
+  example : (A → B) ∧ (B → C) → A → C :=
+  by prop_prover
+
+  example (X : Type) (x y z w : X) : 
+    x = y ∧ (x = y → z = w) → z = w :=
+  by prop_prover
+
+  example : ¬ (A ↔ ¬ A) :=
+  by prop_prover
+
+  -- example : A ∧ (A → B) → (¬ C → ¬ C) → C :=
+  -- by prop_prover
+end
+</div><div class='no-print' align="left"><button type="button" onclick="invoke_leanjs($('#lean-full-code-15').text());">Try it yourself &raquo;</button></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+</body>
+</html>
